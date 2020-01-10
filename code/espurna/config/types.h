@@ -4,6 +4,15 @@
 //------------------------------------------------------------------------------
 
 // -----------------------------------------------------------------------------
+// BROKER
+// -----------------------------------------------------------------------------
+
+#define BROKER_MSG_TYPE_SYSTEM      0
+#define BROKER_MSG_TYPE_DATETIME    1
+#define BROKER_MSG_TYPE_STATUS      2
+#define BROKER_MSG_TYPE_SENSOR      3
+
+// -----------------------------------------------------------------------------
 // WIFI
 // -----------------------------------------------------------------------------
 
@@ -39,9 +48,6 @@
 #define BUTTON_MODE_FACTORY         7
 #define BUTTON_MODE_WPS             8
 #define BUTTON_MODE_SMART_CONFIG    9
-#define BUTTON_MODE_DIM_UP          10
-#define BUTTON_MODE_DIM_DOWN        11
-
 
 // Needed for ESP8285 boards under Windows using PlatformIO (?)
 #ifndef BUTTON_PUSHBUTTON
@@ -66,8 +72,6 @@
 #define RELAY_BOOT_ON               1
 #define RELAY_BOOT_SAME             2
 #define RELAY_BOOT_TOGGLE           3
-#define RELAY_BOOT_LOCKED_OFF       4
-#define RELAY_BOOT_LOCKED_ON        5
 
 #define RELAY_TYPE_NORMAL           0
 #define RELAY_TYPE_INVERSE          1
@@ -78,7 +82,6 @@
 #define RELAY_SYNC_NONE_OR_ONE      1
 #define RELAY_SYNC_ONE              2
 #define RELAY_SYNC_SAME             3
-#define RELAY_SYNC_FIRST            4
 
 #define RELAY_PULSE_NONE            0
 #define RELAY_PULSE_OFF             1
@@ -89,14 +92,6 @@
 #define RELAY_PROVIDER_LIGHT        2
 #define RELAY_PROVIDER_RFBRIDGE     3
 #define RELAY_PROVIDER_STM          4
-
-#define RELAY_GROUP_SYNC_NORMAL      0
-#define RELAY_GROUP_SYNC_INVERSE     1
-#define RELAY_GROUP_SYNC_RECEIVEONLY 2
-
-#define RELAY_LOCK_DISABLED          0
-#define RELAY_LOCK_OFF               1
-#define RELAY_LOCK_ON                2
 
 //------------------------------------------------------------------------------
 // UDP SYSLOG
@@ -143,12 +138,6 @@
 #define MQTT_DISCONNECT_EVENT       1
 #define MQTT_MESSAGE_EVENT          2
 
-// MQTT_LIBRARY
-#define MQTT_LIBRARY_ASYNCMQTTCLIENT        0
-#define MQTT_LIBRARY_ARDUINOMQTT            1
-#define MQTT_LIBRARY_PUBSUBCLIENT           2
-
-
 //------------------------------------------------------------------------------
 // LED
 //------------------------------------------------------------------------------
@@ -183,7 +172,6 @@
 #define LIGHT_PROVIDER_NONE         0
 #define LIGHT_PROVIDER_MY92XX       1       // works with MY9291 and MY9231
 #define LIGHT_PROVIDER_DIMMER       2
-#define LIGHT_PROVIDER_TUYA         3
 
 // -----------------------------------------------------------------------------
 // SCHEDULER
@@ -306,9 +294,6 @@
 #define SENSOR_EZOPH_ID             33
 #define SENSOR_BMP180_ID            34
 #define SENSOR_MAX6675_ID           35
-#define SENSOR_LDR_ID               36
-#define SENSOR_ADE7953_ID           37
-#define SENSOR_T6613_ID             38
 
 //--------------------------------------------------------------------------------
 // Magnitudes
@@ -349,31 +334,3 @@
 #define MAGNITUDE_PH                31
 
 #define MAGNITUDE_MAX               32
-
-//------------------------------------------------------------------------------
-// Telnet server
-//------------------------------------------------------------------------------
-
-#define TELNET_SERVER_ASYNC        0
-#define TELNET_SERVER_WIFISERVER   1
-
-//------------------------------------------------------------------------------
-// OTA Client (not related to the Web OTA support)
-//------------------------------------------------------------------------------
-
-#define OTA_CLIENT_NONE             0
-#define OTA_CLIENT_ASYNCTCP         1
-#define OTA_CLIENT_HTTPUPDATE       2
-
-//------------------------------------------------------------------------------
-// Secure Client
-//------------------------------------------------------------------------------
-
-#define SECURE_CLIENT_NONE                0
-#define SECURE_CLIENT_AXTLS               1
-#define SECURE_CLIENT_BEARSSL             2
-
-#define SECURE_CLIENT_CHECK_NONE          0 // !!! INSECURE CONNECTION !!!
-#define SECURE_CLIENT_CHECK_FINGERPRINT   1 // legacy fingerprint validation
-#define SECURE_CLIENT_CHECK_CA            2 // set trust anchor from PROGMEM CA certificate
-

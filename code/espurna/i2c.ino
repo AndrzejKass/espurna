@@ -2,7 +2,7 @@
 
 I2C MODULE
 
-Copyright (C) 2017-2019 by Xose Pérez <xose dot perez at gmail dot com>
+Copyright (C) 2017-2018 by Xose Pérez <xose dot perez at gmail dot com>
 
 */
 
@@ -351,9 +351,7 @@ void i2cScan() {
     if (nDevices == 0) DEBUG_MSG_P(PSTR("[I2C] No devices found\n"));
 }
 
-#if TERMINAL_SUPPORT
-
-void _i2cInitCommands() {
+void i2cCommands() {
 
     terminalRegisterCommand(F("I2C.SCAN"), [](Embedis* e) {
         i2cScan();
@@ -366,8 +364,6 @@ void _i2cInitCommands() {
     });
 
 }
-
-#endif // TERMINAL_SUPPORT
 
 void i2cSetup() {
 
@@ -385,7 +381,7 @@ void i2cSetup() {
     DEBUG_MSG_P(PSTR("[I2C] Using GPIO%u for SDA and GPIO%u for SCL\n"), sda, scl);
 
     #if TERMINAL_SUPPORT
-        _i2cInitCommands();
+        i2cCommands();
     #endif
 
     #if I2C_CLEAR_BUS

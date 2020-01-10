@@ -9,7 +9,6 @@ Copyright (C) 2016-2017 by Xose Pérez <xose dot perez at gmail dot com>
 #if RFM69_SUPPORT
 
 #include "libs/RFM69Wrap.h"
-#include "ws.h"
 
 #define RFM69_PACKET_SEPARATOR ':'
 
@@ -36,7 +35,7 @@ unsigned long _rfm69_packet_count;
 
 #if WEB_SUPPORT
 
-void _rfm69WebSocketOnConnected(JsonObject& root) {
+void _rfm69WebSocketOnSend(JsonObject& root) {
 
     root["rfm69Visible"] = 1;
     root["rfm69Topic"] = getSetting("rfm69Topic", RFM69_DEFAULT_TOPIC);
@@ -54,7 +53,7 @@ void _rfm69WebSocketOnConnected(JsonObject& root) {
 
 }
 
-bool _rfm69WebSocketOnKeyCheck(const char * key, JsonVariant& value) {
+bool _rfm69WebSocketOnReceive(const char * key, JsonVariant& value) {
     if (strncmp(key, "rfm69", 5) == 0) return true;
     if (strncmp(key, "node", 4) == 0) return true;
     if (strncmp(key, "key", 3) == 0) return true;
@@ -270,10 +269,9 @@ void rfm69Setup() {
     DEBUG_MSG_P(PSTR("[RFM69] Promiscuous mode %s\n"), RFM69_PROMISCUOUS ? "ON" : "OFF");
 
     #if WEB_SUPPORT
-        wsRegister()
-            .onConnected(_rfm69WebSocketOnConnected)
-            .onAction(_rfm69WebSocketOnAction)
-            .onKeyCheck(_rfm69WebSocketOnKeyCheck);
+        wsOnSendRegister(_rfm69WebSocketOnSend);
+        wsOnReceiveRegister(_rfm69WebSocketOnReceive);
+        wsOnActionRegister(_rfm69WebSocketOnAction);
     #endif
 
     // Main callbacks

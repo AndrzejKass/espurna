@@ -2,15 +2,11 @@
 
 WEBSERVER MODULE
 
-Copyright (C) 2016-2019 by Xose Pérez <xose dot perez at gmail dot com>
+Copyright (C) 2016-2018 by Xose Pérez <xose dot perez at gmail dot com>
 
 */
 
 #if WEB_SUPPORT
-
-#include "system.h"
-#include "utils.h"
-#include "ota.h"
 
 #include <ESPAsyncTCP.h>
 #include <ESPAsyncWebServer.h>
@@ -31,20 +27,16 @@ Copyright (C) 2016-2019 by Xose Pérez <xose dot perez at gmail dot com>
     #include "static/index.rfbridge.html.gz.h"
 #elif WEBUI_IMAGE == WEBUI_IMAGE_RFM69
     #include "static/index.rfm69.html.gz.h"
-#elif WEBUI_IMAGE == WEBUI_IMAGE_LIGHTFOX
-    #include "static/index.lightfox.html.gz.h"
-#elif WEBUI_IMAGE == WEBUI_IMAGE_THERMOSTAT
-    #include "static/index.thermostat.html.gz.h"
 #elif WEBUI_IMAGE == WEBUI_IMAGE_FULL
     #include "static/index.all.html.gz.h"
 #endif
 
 #endif // WEB_EMBEDDED
 
-#if WEB_SSL_ENABLED
+#if ASYNC_TCP_SSL_ENABLED & WEB_SSL_ENABLED
 #include "static/server.cer.h"
 #include "static/server.key.h"
-#endif // WEB_SSL_ENABLED
+#endif // ASYNC_TCP_SSL_ENABLED & WEB_SSL_ENABLED
 
 // -----------------------------------------------------------------------------
 
@@ -56,19 +48,11 @@ bool _webConfigSuccess = false;
 std::vector<web_request_callback_f> _web_request_callbacks;
 std::vector<web_body_callback_f> _web_body_callbacks;
 
-constexpr const size_t WEB_CONFIG_BUFFER_MAX = 4096;
-
 // -----------------------------------------------------------------------------
 // HOOKS
 // -----------------------------------------------------------------------------
 
 void _onReset(AsyncWebServerRequest *request) {
-
-    webLog(request);
-    if (!webAuthenticate(request)) {
-        return request->requestAuthentication(getSetting("hostname").c_str());
-    }
-
     deferredReset(100, CUSTOM_RESET_HTTP);
     request->send(200);
 }
@@ -77,17 +61,14 @@ void _onDiscover(AsyncWebServerRequest *request) {
 
     webLog(request);
 
-    const String device = getBoardName();
-    const String hostname = getSetting("hostname");
+    AsyncResponseStream *response = request->beginResponseStream("text/json");
 
-    StaticJsonBuffer<JSON_OBJECT_SIZE(4)> jsonBuffer;
+    DynamicJsonBuffer jsonBuffer;
     JsonObject &root = jsonBuffer.createObject();
     root["app"] = APP_NAME;
     root["version"] = APP_VERSION;
-    root["device"] = device.c_str();
-    root["hostname"] = hostname.c_str();
-
-    AsyncResponseStream *response = request->beginResponseStream("application/json", root.measureLength() + 1);
+    root["hostname"] = getSetting("hostname");
+    root["device"] = getBoardName();
     root.printTo(*response);
 
     request->send(response);
@@ -101,7 +82,7 @@ void _onGetConfig(AsyncWebServerRequest *request) {
         return request->requestAuthentication(getSetting("hostname").c_str());
     }
 
-    AsyncResponseStream *response = request->beginResponseStream("application/json");
+    AsyncResponseStream *response = request->beginResponseStream("text/json");
 
     char buffer[100];
     snprintf_P(buffer, sizeof(buffer), PSTR("attachment; filename=\"%s-backup.json\""), (char *) getSetting("hostname").c_str());
@@ -138,15 +119,13 @@ void _onPostConfig(AsyncWebServerRequest *request) {
     request->send(_webConfigSuccess ? 200 : 400);
 }
 
-void _onPostConfigFile(AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final) {
-
-    if (!webAuthenticate(request)) {
-        return request->requestAuthentication(getSetting("hostname").c_str());
-    }
+void _onPostConfigData(AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final) {
 
     // No buffer
     if (final && (index == 0)) {
-        _webConfigSuccess = settingsRestoreJson((char*) data);
+        DynamicJsonBuffer jsonBuffer;
+        JsonObject& root = jsonBuffer.parseObject((char *) data);
+        if (root.success()) _webConfigSuccess = settingsRestoreJson(root);
         return;
     }
 
@@ -161,12 +140,6 @@ void _onPostConfigFile(AsyncWebServerRequest *request, String filename, size_t i
 
     // Copy
     if (len > 0) {
-        if ((_webConfigBuffer->size() + len) > std::min(WEB_CONFIG_BUFFER_MAX, getFreeHeap() - sizeof(std::vector<uint8_t>))) {
-            delete _webConfigBuffer;
-            _webConfigBuffer = nullptr;
-            request->send(500);
-            return;
-        }
         _webConfigBuffer->reserve(_webConfigBuffer->size() + len);
         _webConfigBuffer->insert(_webConfigBuffer->end(), data, data + len);
     }
@@ -175,7 +148,11 @@ void _onPostConfigFile(AsyncWebServerRequest *request, String filename, size_t i
     if (final) {
 
         _webConfigBuffer->push_back(0);
-        _webConfigSuccess = settingsRestoreJson((char*) _webConfigBuffer->data());
+
+        // Parse JSON
+        DynamicJsonBuffer jsonBuffer;
+        JsonObject& root = jsonBuffer.parseObject((char *) _webConfigBuffer->data());
+        if (root.success()) _webConfigSuccess = settingsRestoreJson(root);
         delete _webConfigBuffer;
 
     }
@@ -196,7 +173,7 @@ void _onHome(AsyncWebServerRequest *request) {
 
     } else {
 
-        #if WEB_SSL_ENABLED
+        #if ASYNC_TCP_SSL_ENABLED
 
             // Chunked response, we calculate the chunks based on free heap (in multiples of 32)
             // This is necessary when a TLS connection is open since it sucks too much memory
@@ -237,7 +214,7 @@ void _onHome(AsyncWebServerRequest *request) {
 }
 #endif
 
-#if WEB_SSL_ENABLED
+#if ASYNC_TCP_SSL_ENABLED & WEB_SSL_ENABLED
 
 int _onCertificate(void * arg, const char *filename, uint8_t **buf) {
 
@@ -288,39 +265,6 @@ int _onCertificate(void * arg, const char *filename, uint8_t **buf) {
 
 #endif
 
-void _onUpgradeResponse(AsyncWebServerRequest *request, int code, const String& payload = "") {
-
-    auto *response = request->beginResponseStream("text/plain", 256);
-    response->addHeader("Connection", "close");
-    response->addHeader("X-XSS-Protection", "1; mode=block");
-    response->addHeader("X-Content-Type-Options", "nosniff");
-    response->addHeader("X-Frame-Options", "deny");
-
-    response->setCode(code);
-
-    if (payload.length()) {
-        response->printf("%s", payload.c_str());
-    } else {
-        if (!Update.hasError()) {
-            response->print("OK");
-        } else {
-            #if defined(ARDUINO_ESP8266_RELEASE_2_3_0)
-                Update.printError(reinterpret_cast<Stream&>(response));
-            #else
-                Update.printError(*response);
-            #endif
-        }
-    }
-
-    request->send(response);
-
-}
-
-void _onUpgradeStatusSet(AsyncWebServerRequest *request, int code, const String& payload = "") {
-    _onUpgradeResponse(request, code, payload);
-    request->_tempObject = malloc(sizeof(bool));
-}
-
 void _onUpgrade(AsyncWebServerRequest *request) {
 
     webLog(request);
@@ -328,113 +272,66 @@ void _onUpgrade(AsyncWebServerRequest *request) {
         return request->requestAuthentication(getSetting("hostname").c_str());
     }
 
-    if (request->_tempObject) {
-        return;
+    char buffer[10];
+    if (!Update.hasError()) {
+        sprintf_P(buffer, PSTR("OK"));
+    } else {
+        sprintf_P(buffer, PSTR("ERROR %d"), Update.getError());
     }
 
-    _onUpgradeResponse(request, 200);
+    AsyncWebServerResponse *response = request->beginResponse(200, "text/plain", buffer);
+    response->addHeader("Connection", "close");
+    response->addHeader("X-XSS-Protection", "1; mode=block");
+    response->addHeader("X-Content-Type-Options", "nosniff");
+    response->addHeader("X-Frame-Options", "deny");
+    if (Update.hasError()) {
+        eepromRotate(true);
+    } else {
+        deferredReset(100, CUSTOM_RESET_UPGRADE);
+    }
+    request->send(response);
 
 }
 
-void _onUpgradeFile(AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final) {
-
-    if (!webAuthenticate(request)) {
-        return request->requestAuthentication(getSetting("hostname").c_str());
-    }
-
-    // We set this after we are done with the request
-    // It is still possible to re-enter this callback even after connection is already closed
-    // 1.14.2: TODO: see https://github.com/me-no-dev/ESPAsyncWebServer/pull/660
-    // remote close or request sending some data before finishing parsing of the body will leak 1460 bytes
-    // waiting a bit for upstream. fork and point to the fixed version if not resolved before 1.14.2
-    if (request->_tempObject) {
-        return;
-    }
+void _onUpgradeData(AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final) {
 
     if (!index) {
-
-        // TODO: stop network activity completely when handling Update through ArduinoOTA or `ota` command?
-        if (Update.isRunning()) {
-            _onUpgradeStatusSet(request, 400, F("ERROR: Upgrade in progress"));
-            return;
-        }
-
-        // Check that header is correct and there is more data before anything is written to the flash
-        if (final || !len) {
-            _onUpgradeStatusSet(request, 400, F("ERROR: Invalid request"));
-            return;
-        }
-
-        if (!otaVerifyHeader(data, len)) {
-            _onUpgradeStatusSet(request, 400, F("ERROR: No magic byte / invalid flash config"));
-            return;
-        }
 
         // Disabling EEPROM rotation to prevent writing to EEPROM after the upgrade
         eepromRotate(false);
 
         DEBUG_MSG_P(PSTR("[UPGRADE] Start: %s\n"), filename.c_str());
         Update.runAsync(true);
-
-        // Note: cannot use request->contentLength() for multipart/form-data
         if (!Update.begin((ESP.getFreeSketchSpace() - 0x1000) & 0xFFFFF000)) {
-            _onUpgradeStatusSet(request, 500);
-            eepromRotate(true);
-            return;
+            #ifdef DEBUG_PORT
+                Update.printError(DEBUG_PORT);
+            #endif
         }
 
     }
 
-    if (request->_tempObject) {
-        return;
-    }
-
-    // Any error will cancel the update, but request may still be alive
-    if (!Update.isRunning()) {
-        return;
-    }
-
-    if (Update.write(data, len) != len) {
-        _onUpgradeStatusSet(request, 500);
-        Update.end();
-        eepromRotate(true);
-        return;
+    if (!Update.hasError()) {
+        if (Update.write(data, len) != len) {
+            #ifdef DEBUG_PORT
+                Update.printError(DEBUG_PORT);
+            #endif
+        }
     }
 
     if (final) {
-        otaFinalize(index + len, CUSTOM_RESET_UPGRADE, true);
+        if (Update.end(true)){
+            DEBUG_MSG_P(PSTR("[UPGRADE] Success:  %u bytes\n"), index + len);
+        } else {
+            #ifdef DEBUG_PORT
+                Update.printError(DEBUG_PORT);
+            #endif
+        }
     } else {
-        otaProgress(index + len);
+        DEBUG_MSG_P(PSTR("[UPGRADE] Progress: %u bytes\r"), index + len);
     }
-
-}
-
-bool _onAPModeRequest(AsyncWebServerRequest *request) {
-
-    if ((WiFi.getMode() & WIFI_AP) > 0) {
-        const String domain = getSetting("hostname") + ".";
-        const String host = request->header("Host");
-        const String ip = WiFi.softAPIP().toString();
-
-        // Only allow requests that use our hostname or ip
-        if (host.equals(ip)) return true;
-        if (host.startsWith(domain)) return true;
-
-        // Immediatly close the connection, ref: https://github.com/xoseperez/espurna/issues/1660
-        // Not doing so will cause memory exhaustion, because the connection will linger
-        request->send(404);
-        request->client()->close();
-
-        return false;
-    }
-
-    return true;
-
 }
 
 void _onRequest(AsyncWebServerRequest *request){
-
-    if (!_onAPModeRequest(request)) return;
 
     // Send request to subscribers
     for (unsigned char i = 0; i < _web_request_callbacks.size(); i++) {
@@ -442,28 +339,18 @@ void _onRequest(AsyncWebServerRequest *request){
         if (response) return;
     }
 
-    // No subscriber handled the request, return a 404 with implicit "Connection: close"
+    // No subscriber handled the request, return a 404
     request->send(404);
-
-    // And immediatly close the connection, ref: https://github.com/xoseperez/espurna/issues/1660
-    // Not doing so will cause memory exhaustion, because the connection will linger
-    request->client()->close();
 
 }
 
 void _onBody(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
-
-    if (!_onAPModeRequest(request)) return;
 
     // Send request to subscribers
     for (unsigned char i = 0; i < _web_body_callbacks.size(); i++) {
         bool response = (_web_body_callbacks[i])(request, data, len, index, total);
         if (response) return;
     }
-
-    // Same as _onAPModeRequest(...)
-    request->send(404);
-    request->client()->close();
 
 }
 
@@ -472,7 +359,10 @@ void _onBody(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t i
 
 bool webAuthenticate(AsyncWebServerRequest *request) {
     #if USE_PASSWORD
-        return request->authenticate(WEB_USERNAME, getAdminPass().c_str());
+        String password = getAdminPass();
+        char httpPassword[password.length() + 1];
+        password.toCharArray(httpPassword, password.length() + 1);
+        return request->authenticate(WEB_USERNAME, httpPassword);
     #else
         return true;
     #endif
@@ -493,7 +383,7 @@ void webRequestRegister(web_request_callback_f callback) {
 }
 
 unsigned int webPort() {
-    #if WEB_SSL_ENABLED
+    #if ASYNC_TCP_SSL_ENABLED & WEB_SSL_ENABLED
         return 443;
     #else
         return getSetting("webPort", WEB_PORT).toInt();
@@ -524,8 +414,8 @@ void webSetup() {
     // Other entry points
     _server->on("/reset", HTTP_GET, _onReset);
     _server->on("/config", HTTP_GET, _onGetConfig);
-    _server->on("/config", HTTP_POST | HTTP_PUT, _onPostConfig, _onPostConfigFile);
-    _server->on("/upgrade", HTTP_POST, _onUpgrade, _onUpgradeFile);
+    _server->on("/config", HTTP_POST | HTTP_PUT, _onPostConfig, _onPostConfigData);
+    _server->on("/upgrade", HTTP_POST, _onUpgrade, _onUpgradeData);
     _server->on("/discover", HTTP_GET, _onDiscover);
 
     // Serve static files
@@ -544,7 +434,7 @@ void webSetup() {
     _server->onNotFound(_onRequest);
 
     // Run server
-    #if WEB_SSL_ENABLED
+    #if ASYNC_TCP_SSL_ENABLED & WEB_SSL_ENABLED
         _server->onSslFileRequest(_onCertificate, NULL);
         _server->beginSecure("server.cer", "server.key", NULL);
     #else

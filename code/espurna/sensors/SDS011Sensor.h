@@ -1,5 +1,5 @@
 // -----------------------------------------------------------------------------
-// SDS011 dust sensor
+// SDS011 particulates sensor
 // Based on: https://github.com/ricki-z/SDS011
 //
 // Uses SoftwareSerial library

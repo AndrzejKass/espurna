@@ -21,8 +21,6 @@ stat_bytes() {
 destination=../firmware
 version_file=espurna/config/version.h
 version=$(grep -E '^#define APP_VERSION' $version_file | awk '{print $3}' | sed 's/"//g')
-script_build_environments=true
-script_build_webui=true
 
 if ${TRAVIS:-false}; then
     git_revision=${TRAVIS_COMMIT::7}
@@ -62,6 +60,9 @@ list_envs() {
 
 travis=$(list_envs | grep travis | sort)
 available=$(list_envs | grep -Ev -- '-ota$|-ssl$|^travis' | sort)
+
+# Build tools settings
+export PLATFORMIO_BUILD_FLAGS="${PLATFORMIO_BUILD_FLAGS} -DAPP_REVISION='\"$git_revision\"'"
 
 # Functions
 print_available() {
@@ -111,61 +112,26 @@ build_webui() {
     echo "--------------------------------------------------------------"
     echo "Building web interface..."
     node node_modules/gulp/bin/gulp.js || exit
-
-    # TODO: do something if webui files are different
-    # for now, just print in travis log
-    if ${TRAVIS:-false}; then
-        git --no-pager diff --stat
-    fi
 }
 
 build_environments() {
     echo "--------------------------------------------------------------"
     echo "Building firmware images..."
-    mkdir -p $destination/espurna-$version
+    mkdir -p ../firmware/espurna-$version
 
     for environment in $environments; do
-        echo "* espurna-$version-$environment.bin"
+        echo -n "* espurna-$version-$environment.bin --- "
         platformio run --silent --environment $environment || exit 1
-        echo -n "SIZE:    "
-        stat_bytes .pio/build/$environment/firmware.bin
+        stat_bytes .pioenvs/$environment/firmware.bin
         [[ "${TRAVIS_BUILD_STAGE_NAME}" = "Test" ]] || \
-            mv .pio/build/$environment/firmware.bin $destination/espurna-$version/espurna-$version-$environment.bin
+            mv .pioenvs/$environment/firmware.bin $destination/espurna-$version/espurna-$version-$environment.bin
     done
     echo "--------------------------------------------------------------"
 }
 
 # Parameters
-print_getopts_help() {
-    cat <<EOF
-Usage: $(basename "$0") [OPTION] <ENVIRONMENT>...
-
-  Where ENVIRONMENT is environment name(s) from platformio.ini
-
-Options:
-
-  -f VALUE    Filter build stage by name to skip it
-              Supported VALUEs are "environments" and "webui"
-              Can be specified multiple times
-  -l          Print available environments
-  -d VALUE    Destination to move .bin files after building environments
-  -p          Enable parallel build
-              Depends on following exported variables:
-                BUILDER_THREAD=<number>        (default 0...4)
-                BUILDER_TOTAL_THREADS=<number> (default 4)
-              When building platformio environments, will only pick every <BUILDER_THREAD>th
-  -h          Display this message
-EOF
-}
-
-while getopts "f:lpd:h" opt; do
+while getopts "lpd:" opt; do
   case $opt in
-    f)
-        case "$OPTARG" in
-            webui) script_build_webui=false ;;
-            environments) script_build_environments=false ;;
-        esac
-        ;;
     l)
         print_available
         exit
@@ -176,9 +142,6 @@ while getopts "f:lpd:h" opt; do
     d)
         destination=$OPTARG
         ;;
-    h)
-        print_getopts_help
-        exit
     esac
 done
 
@@ -192,18 +155,13 @@ echo "Building for version ${version}" ${git_revision:+($git_revision)}
 # Environments to build
 environments=$@
 
-if $script_build_webui ; then
-    build_webui
+if [ $# -eq 0 ]; then
+    set_default_environments
 fi
 
-if $script_build_environments ; then
-    if [ $# -eq 0 ]; then
-        set_default_environments
-    fi
-
-    if ${CI:-false}; then
-        print_environments
-    fi
-
-    build_environments
+if ${CI:-false}; then
+    print_environments
 fi
+
+build_webui
+build_environments

@@ -23,9 +23,6 @@ void eepromRotate(bool value) {
             DEBUG_MSG_P(PSTR("[EEPROM] Disabling EEPROM rotation\n"));
         }
         EEPROMr.rotate(value);
-
-        // Because .rotate(false) marks EEPROM as dirty, this is equivalent to the .backup(0)
-        eepromCommit();
     }
 }
 
@@ -55,10 +52,6 @@ bool _eepromCommit() {
 
 void eepromCommit() {
     _eeprom_commit = true;
-}
-
-void eepromBackup(uint32_t index){
-    EEPROMr.backup(index);
 }
 
 #if TERMINAL_SUPPORT

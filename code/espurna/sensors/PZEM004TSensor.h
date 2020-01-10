@@ -1,6 +1,6 @@
 // -----------------------------------------------------------------------------
 // PZEM004T based power monitor
-// Copyright (C) 2019 by Xose Pérez <xose dot perez at gmail dot com>
+// Copyright (C) 2018 by Xose Pérez <xose dot perez at gmail dot com>
 // -----------------------------------------------------------------------------
 
 // Connection Diagram:
@@ -247,11 +247,7 @@ class PZEM004TSensor : public BaseSensor {
             _busy = true;
 
             // Clear buffer in case of late response(Timeout)
-            if (_serial) {
-                while(_serial->available() > 0) _serial->read();
-            } else {
-                // This we cannot do it from outside the library
-            }
+            while(Serial.available() > 0) Serial.read();
 
             float read;
             float* readings_p;

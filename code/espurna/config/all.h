@@ -19,8 +19,6 @@
 
 */
 
-#include <core_version.h>
-
 #ifdef USE_CUSTOM_H
 #include "custom.h"
 #endif
@@ -30,8 +28,6 @@
 #include "arduino.h"
 #include "hardware.h"
 #include "defaults.h"
-#include "buildtime.h"
-#include "deprecated.h"
 #include "general.h"
 #include "dependencies.h"
 #include "debug.h"

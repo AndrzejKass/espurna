@@ -2,7 +2,7 @@
 
 API MODULE
 
-Copyright (C) 2016-2019 by Xose Pérez <xose dot perez at gmail dot com>
+Copyright (C) 2016-2018 by Xose Pérez <xose dot perez at gmail dot com>
 
 */
 
@@ -13,8 +13,6 @@ Copyright (C) 2016-2019 by Xose Pérez <xose dot perez at gmail dot com>
 #include <ArduinoJson.h>
 #include <vector>
 
-#include "system.h"
-
 typedef struct {
     char * key;
     api_get_callback_f getFn = NULL;
@@ -24,13 +22,14 @@ std::vector<web_api_t> _apis;
 
 // -----------------------------------------------------------------------------
 
-bool _apiWebSocketOnKeyCheck(const char * key, JsonVariant& value) {
+bool _apiWebSocketOnReceive(const char * key, JsonVariant& value) {
     return (strncmp(key, "api", 3) == 0);
 }
 
-void _apiWebSocketOnConnected(JsonObject& root) {
+void _apiWebSocketOnSend(JsonObject& root) {
+    root["apiVisible"] = 1;
     root["apiEnabled"] = getSetting("apiEnabled", API_ENABLED).toInt() == 1;
-    root["apiKey"] = getSetting("apiKey", API_KEY);
+    root["apiKey"] = getSetting("apiKey");
     root["apiRealTime"] = getSetting("apiRealTime", API_REAL_TIME_VALUES).toInt() == 1;
     root["apiRestFul"] = getSetting("apiRestFul", API_RESTFUL).toInt() == 1;
 }
@@ -45,16 +44,21 @@ void _apiConfigure() {
 
 bool _authAPI(AsyncWebServerRequest *request) {
 
-    const String key = getSetting("apiKey", API_KEY);
-    if (!key.length() || getSetting("apiEnabled", API_ENABLED).toInt() == 0) {
+    if (getSetting("apiEnabled", API_ENABLED).toInt() == 0) {
         DEBUG_MSG_P(PSTR("[WEBSERVER] HTTP API is not enabled\n"));
         request->send(403);
         return false;
     }
 
+    if (!request->hasParam("apikey", (request->method() == HTTP_PUT))) {
+        DEBUG_MSG_P(PSTR("[WEBSERVER] Missing apikey parameter\n"));
+        request->send(403);
+        return false;
+    }
+
     AsyncWebParameter* p = request->getParam("apikey", (request->method() == HTTP_PUT));
-    if (!p || !p->value().equals(key)) {
-        DEBUG_MSG_P(PSTR("[WEBSERVER] Wrong / missing apikey parameter\n"));
+    if (!p->value().equals(getSetting("apiKey"))) {
+        DEBUG_MSG_P(PSTR("[WEBSERVER] Wrong apikey parameter\n"));
         request->send(403);
         return false;
     }
@@ -72,47 +76,6 @@ bool _asJson(AsyncWebServerRequest *request) {
     return asJson;
 }
 
-void _onAPIsText(AsyncWebServerRequest *request) {
-    AsyncResponseStream *response = request->beginResponseStream("text/plain");
-    String output;
-    output.reserve(48);
-    for (unsigned int i=0; i < _apis.size(); i++) {
-        output = "";
-        output += _apis[i].key;
-        output += " -> ";
-        output += "/api/";
-        output += _apis[i].key;
-        output += '\n';
-        response->write(output.c_str());
-    }
-    request->send(response);
-}
-
-constexpr const size_t API_JSON_BUFFER_SIZE = 1024;
-
-void _onAPIsJson(AsyncWebServerRequest *request) {
-
-
-    DynamicJsonBuffer jsonBuffer(API_JSON_BUFFER_SIZE);
-    JsonObject& root = jsonBuffer.createObject();
-
-    constexpr const int BUFFER_SIZE = 48;
-
-    for (unsigned int i=0; i < _apis.size(); i++) {
-        char buffer[BUFFER_SIZE] = {0};
-        int res = snprintf(buffer, sizeof(buffer), "/api/%s", _apis[i].key);
-        if ((res < 0) || (res > (BUFFER_SIZE - 1))) {
-            request->send(500);
-            return;
-        }
-        root[_apis[i].key] = buffer;
-    }
-    AsyncResponseStream *response = request->beginResponseStream("application/json");
-    root.printTo(*response);
-    request->send(response);
-
-}
-
 void _onAPIs(AsyncWebServerRequest *request) {
 
     webLog(request);
@@ -120,11 +83,26 @@ void _onAPIs(AsyncWebServerRequest *request) {
 
     bool asJson = _asJson(request);
 
+    char buffer[40];
+
     String output;
     if (asJson) {
-        _onAPIsJson(request);
+        DynamicJsonBuffer jsonBuffer;
+        JsonObject& root = jsonBuffer.createObject();
+        for (unsigned int i=0; i < _apis.size(); i++) {
+            snprintf_P(buffer, sizeof(buffer), PSTR("/api/%s"), _apis[i].key);
+            root[_apis[i].key] = String(buffer);
+        }
+        root.printTo(output);
+        jsonBuffer.clear();
+        request->send(200, "application/json", output);
+
     } else {
-        _onAPIsText(request);
+        for (unsigned int i=0; i < _apis.size(); i++) {
+            snprintf_P(buffer, sizeof(buffer), PSTR("/api/%s"), _apis[i].key);
+            output += _apis[i].key + String(" -> ") + String(buffer) + String("\n");
+        }
+        request->send(200, "text/plain", output);
     }
 
 }
@@ -242,10 +220,8 @@ void apiRegister(const char * key, api_get_callback_f getFn, api_put_callback_f 
 
 void apiSetup() {
     _apiConfigure();
-    wsRegister()
-        .onVisible([](JsonObject& root) { root["apiVisible"] = 1; })
-        .onConnected(_apiWebSocketOnConnected)
-        .onKeyCheck(_apiWebSocketOnKeyCheck);
+    wsOnSendRegister(_apiWebSocketOnSend);
+    wsOnReceiveRegister(_apiWebSocketOnReceive);
     webRequestRegister(_apiRequestCallback);
     espurnaRegisterReload(_apiConfigure);
 }

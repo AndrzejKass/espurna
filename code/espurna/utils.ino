@@ -2,15 +2,14 @@
 
 UTILS MODULE
 
-Copyright (C) 2017-2019 by Xose Pérez <xose dot perez at gmail dot com>
+Copyright (C) 2017-2018 by Xose Pérez <xose dot perez at gmail dot com>
 
 */
 
-#include "utils.h"
-#include "libs/HeapStats.h"
-
 #include <Ticker.h>
-#include <limits>
+Ticker _defer_reset;
+
+uint8_t _reset_reason = 0;
 
 String getIdentifier() {
     char buffer[20];
@@ -40,36 +39,23 @@ String getAdminPass() {
     return getSetting("adminPass", ADMIN_PASS);
 }
 
-const String& getCoreVersion() {
-    static String version;
-    if (!version.length()) {
-        #ifdef ARDUINO_ESP8266_RELEASE
-            version = ESP.getCoreVersion();
-            if (version.equals("00000000")) {
-                version = String(ARDUINO_ESP8266_RELEASE);
-            }
-            version.replace("_", ".");
-        #else
-            #define _GET_COREVERSION_STR(X) #X
-            #define GET_COREVERSION_STR(X) _GET_COREVERSION_STR(X)
-            version = GET_COREVERSION_STR(ARDUINO_ESP8266_GIT_DESC);
-            #undef _GET_COREVERSION_STR
-            #undef GET_COREVERSION_STR
-        #endif
-    }
+String getCoreVersion() {
+    String version = ESP.getCoreVersion();
+    #ifdef ARDUINO_ESP8266_RELEASE
+        if (version.equals("00000000")) {
+            version = String(ARDUINO_ESP8266_RELEASE);
+        }
+    #endif
+    version.replace("_", ".");
     return version;
 }
 
-const String& getCoreRevision() {
-    static String revision;
-    if (!revision.length()) {
-        #ifdef ARDUINO_ESP8266_GIT_VER
-            revision = String(ARDUINO_ESP8266_GIT_VER, 16);
-        #else
-            revision = "(unspecified)";
-        #endif
-    }
-    return revision;
+String getCoreRevision() {
+    #ifdef ARDUINO_ESP8266_GIT_VER
+        return String(ARDUINO_ESP8266_GIT_VER);
+    #else
+        return String("");
+    #endif
 }
 
 unsigned char getHeartbeatMode() {
@@ -80,12 +66,28 @@ unsigned char getHeartbeatInterval() {
     return getSetting("hbInterval", HEARTBEAT_INTERVAL).toInt();
 }
 
-String getEspurnaModules() {
-    return FPSTR(espurna_modules);
+// WTF
+// Calling ESP.getFreeHeap() is making the system crash on a specific
+// AiLight bulb, but anywhere else...
+unsigned int getFreeHeap() {
+    if (getSetting("wtfHeap", 0).toInt() == 1) return 9999;
+    return ESP.getFreeHeap();
 }
 
-String getEspurnaOTAModules() {
-    return FPSTR(espurna_ota_modules);
+unsigned int getInitialFreeHeap() {
+    static unsigned int _heap = 0;
+    if (0 == _heap) {
+        _heap = getFreeHeap();
+    }
+    return _heap;
+}
+
+unsigned int getUsedHeap() {
+    return getInitialFreeHeap() - getFreeHeap();
+}
+
+String getEspurnaModules() {
+    return FPSTR(espurna_modules);
 }
 
 #if SENSOR_SUPPORT
@@ -99,18 +101,34 @@ String getEspurnaWebUI() {
 }
 
 String buildTime() {
-    #if NTP_SUPPORT
-        return ntpDateTime(__UNIX_TIMESTAMP__);
-    #else
-        char buffer[20];
-        snprintf_P(
-            buffer, sizeof(buffer), PSTR("%04d-%02d-%02d %02d:%02d:%02d"),
-            __TIME_YEAR__, __TIME_MONTH__, __TIME_DAY__,
-            __TIME_HOUR__, __TIME_MINUTE__, __TIME_SECOND__
-        );
-        return String(buffer);
-    #endif
+
+    const char time_now[] = __TIME__;   // hh:mm:ss
+    unsigned int hour = atoi(&time_now[0]);
+    unsigned int minute = atoi(&time_now[3]);
+    unsigned int second = atoi(&time_now[6]);
+
+    const char date_now[] = __DATE__;   // Mmm dd yyyy
+    const char *months[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
+    unsigned int month = 0;
+    for ( int i = 0; i < 12; i++ ) {
+        if (strncmp(date_now, months[i], 3) == 0 ) {
+            month = i + 1;
+            break;
+        }
+    }
+    unsigned int day = atoi(&date_now[3]);
+    unsigned int year = atoi(&date_now[7]);
+
+    char buffer[20];
+    snprintf_P(
+        buffer, sizeof(buffer), PSTR("%04d-%02d-%02d %02d:%02d:%02d"),
+        year, month, day, hour, minute, second
+    );
+
+    return String(buffer);
+
 }
+
 
 unsigned long getUptime() {
 
@@ -125,20 +143,10 @@ unsigned long getUptime() {
 
 }
 
-bool haveRelaysOrSensors() {
-    bool result = false;
-    result = (relayCount() > 0);
-    #if SENSOR_SUPPORT
-        result = result || (magnitudeCount() > 0);
-    #endif
-    return result;
-}
-
 // -----------------------------------------------------------------------------
 // Heartbeat helper
 // -----------------------------------------------------------------------------
 namespace Heartbeat {
-
     enum Report : uint32_t { 
         Status = 1 << 1,
         Ssid = 1 << 2,
@@ -156,11 +164,7 @@ namespace Heartbeat {
         Version = 1 << 14,
         Board = 1 << 15,
         Loadavg = 1 << 16,
-        Interval = 1 << 17,
-        Description = 1 << 18,
-        Range = 1 << 19,
-        RemoteTemp = 1 << 20,
-        Bssid = 1 << 21
+        Interval = 1 << 17
     };
 
     constexpr uint32_t defaultValue() {
@@ -176,33 +180,18 @@ namespace Heartbeat {
             (Relay * (HEARTBEAT_REPORT_RELAY)) | \
             (Light * (HEARTBEAT_REPORT_LIGHT)) | \
             (Hostname * (HEARTBEAT_REPORT_HOSTNAME)) | \
-            (Description * (HEARTBEAT_REPORT_DESCRIPTION)) | \
             (App * (HEARTBEAT_REPORT_APP)) | \
             (Version * (HEARTBEAT_REPORT_VERSION)) | \
             (Board * (HEARTBEAT_REPORT_BOARD)) | \
             (Loadavg * (HEARTBEAT_REPORT_LOADAVG)) | \
-            (Interval * (HEARTBEAT_REPORT_INTERVAL)) | \
-            (Range * (HEARTBEAT_REPORT_RANGE)) | \
-            (RemoteTemp * (HEARTBEAT_REPORT_REMOTE_TEMP)) | \
-            (Bssid * (HEARTBEAT_REPORT_BSSID));
+            (Interval * (HEARTBEAT_REPORT_INTERVAL));
     }
 
     uint32_t currentValue() {
-        // use default without any setting / when it is empty
         const String cfg = getSetting("hbReport");
-        if (!cfg.length()) {
-            return defaultValue();
-        }
+        if (!cfg.length()) return defaultValue();
 
-        const auto value = u32fromString(cfg);
-
-        // because we start shifting from 1, we could use the
-        // first bit as a flag to enable all of the messages
-        if (value == 1) {
-            return std::numeric_limits<uint32_t>::max();
-        }
-
-        return value;
+        return strtoul(cfg.c_str(), NULL, 10);
     }
 
 }
@@ -210,10 +199,7 @@ namespace Heartbeat {
 void heartbeat() {
 
     unsigned long uptime_seconds = getUptime();
-    heap_stats_t heap_stats = getHeapStats();
-
-    UNUSED(uptime_seconds);
-    UNUSED(heap_stats);
+    unsigned int free_heap = getFreeHeap();
 
     #if MQTT_SUPPORT
         unsigned char _heartbeat_mode = getHeartbeatMode();
@@ -228,7 +214,7 @@ void heartbeat() {
 
     if (serial) {
         DEBUG_MSG_P(PSTR("[MAIN] Uptime: %lu seconds\n"), uptime_seconds);
-        infoHeapStats();
+        infoMemory("Heap", getInitialFreeHeap(), getFreeHeap());
         #if ADC_MODE_VALUE == ADC_VCC
             DEBUG_MSG_P(PSTR("[MAIN] Power: %lu mV\n"), ESP.getVcc());
         #endif
@@ -247,7 +233,7 @@ void heartbeat() {
     #if MQTT_SUPPORT
         if (!serial && (_heartbeat_mode == HEARTBEAT_REPEAT || systemGetHeartbeat())) {
             if (hb_cfg & Heartbeat::Interval)
-                mqttSend(MQTT_TOPIC_INTERVAL, String(getHeartbeatInterval()).c_str());
+                mqttSend(MQTT_TOPIC_INTERVAL, String(getHeartbeatInterval() / 1000).c_str());
 
             if (hb_cfg & Heartbeat::App)
                 mqttSend(MQTT_TOPIC_APP, APP_NAME);
@@ -261,17 +247,8 @@ void heartbeat() {
             if (hb_cfg & Heartbeat::Hostname)
                 mqttSend(MQTT_TOPIC_HOSTNAME, getSetting("hostname", getIdentifier()).c_str());
 
-            if (hb_cfg & Heartbeat::Description) {
-                if (hasSetting("desc")) {
-                    mqttSend(MQTT_TOPIC_DESCRIPTION, getSetting("desc").c_str());
-                }
-            }
-
             if (hb_cfg & Heartbeat::Ssid)
                 mqttSend(MQTT_TOPIC_SSID, WiFi.SSID().c_str());
-
-            if (hb_cfg & Heartbeat::Bssid)
-                mqttSend(MQTT_TOPIC_BSSID, WiFi.BSSIDstr().c_str());
 
             if (hb_cfg & Heartbeat::Ip)
                 mqttSend(MQTT_TOPIC_IP, getIP().c_str());
@@ -291,7 +268,7 @@ void heartbeat() {
             #endif
 
             if (hb_cfg & Heartbeat::Freeheap)
-                mqttSend(MQTT_TOPIC_FREEHEAP, String(heap_stats.available).c_str());
+                mqttSend(MQTT_TOPIC_FREEHEAP, String(free_heap).c_str());
 
             if (hb_cfg & Heartbeat::Relay)
                 relayMQTT();
@@ -305,26 +282,13 @@ void heartbeat() {
                 mqttSend(MQTT_TOPIC_VCC, String(ESP.getVcc()).c_str());
 
             if (hb_cfg & Heartbeat::Status)
-                mqttSendStatus();
+                mqttSend(MQTT_TOPIC_STATUS, MQTT_STATUS_ONLINE, true);
 
             if (hb_cfg & Heartbeat::Loadavg)
                 mqttSend(MQTT_TOPIC_LOADAVG, String(systemLoadAverage()).c_str());
 
-            #if THERMOSTAT_SUPPORT
-                if (hb_cfg & Heartbeat::Range) {
-                    mqttSend(MQTT_TOPIC_HOLD_TEMP "_" MQTT_TOPIC_HOLD_TEMP_MIN, String(_temp_range.min).c_str());
-                    mqttSend(MQTT_TOPIC_HOLD_TEMP "_" MQTT_TOPIC_HOLD_TEMP_MAX, String(_temp_range.max).c_str());
-                }
-
-                if (hb_cfg & Heartbeat::RemoteTemp) {
-                    char remote_temp[16];
-                    dtostrf(_remote_temp.temp, 1, 1, remote_temp);
-                    mqttSend(MQTT_TOPIC_REMOTE_TEMP, remote_temp);
-                }
-            #endif
-
         } else if (!serial && _heartbeat_mode == HEARTBEAT_REPEAT_STATUS) {
-            mqttSendStatus();
+            mqttSend(MQTT_TOPIC_STATUS, MQTT_STATUS_ONLINE, true);
         }
 
     #endif
@@ -338,22 +302,10 @@ void heartbeat() {
             idbSend(MQTT_TOPIC_UPTIME, String(uptime_seconds).c_str());
 
         if (hb_cfg & Heartbeat::Freeheap)
-            idbSend(MQTT_TOPIC_FREEHEAP, String(heap_stats.available).c_str());
+            idbSend(MQTT_TOPIC_FREEHEAP, String(free_heap).c_str());
 
         if (hb_cfg & Heartbeat::Rssi)
             idbSend(MQTT_TOPIC_RSSI, String(WiFi.RSSI()).c_str());
-
-        if ((hb_cfg & Heartbeat::Vcc) && (ADC_MODE_VALUE == ADC_VCC))
-            idbSend(MQTT_TOPIC_VCC, String(ESP.getVcc()).c_str());
-                    
-        if (hb_cfg & Heartbeat::Loadavg)
-            idbSend(MQTT_TOPIC_LOADAVG, String(systemLoadAverage()).c_str());
-
-        if (hb_cfg & Heartbeat::Ssid)
-            idbSend(MQTT_TOPIC_SSID, WiFi.SSID().c_str());
-
-        if (hb_cfg & Heartbeat::Bssid)
-            idbSend(MQTT_TOPIC_BSSID, WiFi.BSSIDstr().c_str());
     #endif
 
 }
@@ -408,16 +360,6 @@ void infoMemory(const char * name, unsigned int total_memory, unsigned int free_
 
 }
 
-const char* _info_wifi_sleep_mode(WiFiSleepType_t type) {
-    switch (type) {
-        case WIFI_NONE_SLEEP: return "NONE";
-        case WIFI_LIGHT_SLEEP: return "LIGHT";
-        case WIFI_MODEM_SLEEP: return "MODEM";
-        default: return "UNKNOWN";
-    }
-}
-
-
 void info() {
 
     DEBUG_MSG_P(PSTR("\n\n---8<-------\n\n"));
@@ -436,13 +378,11 @@ void info() {
     DEBUG_MSG_P(PSTR("[MAIN] SDK version: %s\n"), ESP.getSdkVersion());
     DEBUG_MSG_P(PSTR("[MAIN] Core version: %s\n"), getCoreVersion().c_str());
     DEBUG_MSG_P(PSTR("[MAIN] Core revision: %s\n"), getCoreRevision().c_str());
-    DEBUG_MSG_P(PSTR("[MAIN] Build time: %lu\n"), __UNIX_TIMESTAMP__);
     DEBUG_MSG_P(PSTR("\n"));
 
     // -------------------------------------------------------------------------
 
     FlashMode_t mode = ESP.getFlashChipMode();
-    UNUSED(mode);
     DEBUG_MSG_P(PSTR("[MAIN] Flash chip ID: 0x%06X\n"), ESP.getFlashChipId());
     DEBUG_MSG_P(PSTR("[MAIN] Flash speed: %u Hz\n"), ESP.getFlashChipSpeed());
     DEBUG_MSG_P(PSTR("[MAIN] Flash mode: %s\n"), mode == FM_QIO ? "QIO" : mode == FM_QOUT ? "QOUT" : mode == FM_DIO ? "DIO" : mode == FM_DOUT ? "DOUT" : "UNKNOWN");
@@ -485,20 +425,16 @@ void info() {
 
     // -------------------------------------------------------------------------
 
-    static bool show_frag_stats = false;
-
     infoMemory("EEPROM", SPI_FLASH_SEC_SIZE, SPI_FLASH_SEC_SIZE - settingsSize());
-    infoHeapStats(show_frag_stats);
-    infoMemory("Stack", CONT_STACKSIZE, getFreeStack());
+    infoMemory("Heap", getInitialFreeHeap(), getFreeHeap());
+    infoMemory("Stack", 4096, getFreeStack());
     DEBUG_MSG_P(PSTR("\n"));
-
-    show_frag_stats = true;
 
     // -------------------------------------------------------------------------
 
     DEBUG_MSG_P(PSTR("[MAIN] Boot version: %d\n"), ESP.getBootVersion());
     DEBUG_MSG_P(PSTR("[MAIN] Boot mode: %d\n"), ESP.getBootMode());
-    unsigned char reason = customResetReason();
+    unsigned char reason = resetReason();
     if (reason > 0) {
         char buffer[32];
         strcpy_P(buffer, custom_reset_string[reason-1]);
@@ -513,7 +449,6 @@ void info() {
 
     DEBUG_MSG_P(PSTR("[MAIN] Board: %s\n"), getBoardName().c_str());
     DEBUG_MSG_P(PSTR("[MAIN] Support: %s\n"), getEspurnaModules().c_str());
-    DEBUG_MSG_P(PSTR("[MAIN] OTA: %s\n"), getEspurnaOTAModules().c_str());
     #if SENSOR_SUPPORT
         DEBUG_MSG_P(PSTR("[MAIN] Sensors: %s\n"), getEspurnaSensors().c_str());
     #endif // SENSOR_SUPPORT
@@ -526,14 +461,7 @@ void info() {
     #if ADC_MODE_VALUE == ADC_VCC
         DEBUG_MSG_P(PSTR("[MAIN] Power: %u mV\n"), ESP.getVcc());
     #endif
-    if (espurnaLoopDelay()) {
-        DEBUG_MSG_P(PSTR("[MAIN] Power saving delay value: %lu ms\n"), espurnaLoopDelay());
-    }
-
-    const WiFiSleepType_t sleep_mode = WiFi.getSleepMode();
-    if (sleep_mode != WIFI_NONE_SLEEP) {
-        DEBUG_MSG_P(PSTR("[MAIN] WiFi Sleep Mode: %s\n"), _info_wifi_sleep_mode(sleep_mode));
-    }
+    DEBUG_MSG_P(PSTR("[MAIN] Power saving delay value: %lu ms\n"), systemLoopDelay());
 
     // -------------------------------------------------------------------------
 
@@ -553,6 +481,8 @@ void info() {
 // -----------------------------------------------------------------------------
 // SSL
 // -----------------------------------------------------------------------------
+
+#if ASYNC_TCP_SSL_ENABLED
 
 bool sslCheckFingerPrint(const char * fingerprint) {
     return (strlen(fingerprint) == 59);
@@ -589,31 +519,40 @@ bool sslFingerPrintChar(const char * fingerprint, char * destination) {
 
 }
 
+#endif
+
 // -----------------------------------------------------------------------------
 // Reset
 // -----------------------------------------------------------------------------
 
-// Use fixed method for Core 2.3.0, because it erases only 2 out of 4 SDK-reserved sectors
-// Fixed since 2.4.0, see: esp8266/core/esp8266/Esp.cpp: ESP::eraseConfig()
-bool eraseSDKConfig() {
-    #if defined(ARDUINO_ESP8266_RELEASE_2_3_0)
-        constexpr size_t cfgsize = 0x4000;
-        size_t cfgaddr = ESP.getFlashChipSize() - cfgsize;
-
-        for (size_t offset = 0; offset < cfgsize; offset += SPI_FLASH_SEC_SIZE) {
-            if (!ESP.flashEraseSector((cfgaddr + offset) / SPI_FLASH_SEC_SIZE)) {
-                return false;
-            }
-        }
-
-        return true;
-    #else
-        return ESP.eraseConfig();
-    #endif
+unsigned char resetReason() {
+    static unsigned char status = 255;
+    if (status == 255) {
+        status = EEPROMr.read(EEPROM_CUSTOM_RESET);
+        if (status > 0) resetReason(0);
+        if (status > CUSTOM_RESET_MAX) status = 0;
+    }
+    return status;
 }
 
-// -----------------------------------------------------------------------------
-// Helper functions
+void resetReason(unsigned char reason) {
+    _reset_reason = reason;
+    EEPROMr.write(EEPROM_CUSTOM_RESET, reason);
+    eepromCommit();
+}
+
+void reset() {
+    ESP.restart();
+}
+
+void deferredReset(unsigned long delay, unsigned char reason) {
+    _defer_reset.once_ms(delay, resetReason, reason);
+}
+
+bool checkNeedsReset() {
+    return _reset_reason > 0;
+}
+
 // -----------------------------------------------------------------------------
 
 char * ltrim(char * s) {
@@ -657,74 +596,4 @@ bool isNumber(const char * s) {
         }
     }
     return digit;
-}
-
-// ref: lwip2 lwip_strnstr with strnlen
-char* strnstr(const char* buffer, const char* token, size_t n) {
-  size_t token_len = strnlen(token, n);
-  if (token_len == 0) {
-    return const_cast<char*>(buffer);
-  }
-
-  for (const char* p = buffer; *p && (p + token_len <= buffer + n); p++) {
-    if ((*p == *token) && (strncmp(p, token, token_len) == 0)) {
-      return const_cast<char*>(p);
-    }
-  }
-
-  return nullptr;
-}
-
-// TODO: force getSetting return type to handle settings
-uint32_t u32fromString(const String& string, int base) {
-
-    const char *ptr = string.c_str();
-    char *value_endptr = nullptr;
-
-    // invalidate the whole string when invalid chars are detected
-    const auto value = strtoul(ptr, &value_endptr, base);
-    if (value_endptr == ptr || value_endptr[0] != '\0') {
-        return 0;
-    }
-
-    return value;
-
-}
-
-uint32_t u32fromString(const String& string) {
-    if (!string.length()) {
-        return 0;
-    }
-
-    int base = 10;
-    if (string.length() > 2) {
-        if (string.startsWith("0b")) {
-            base = 2;
-        } else if (string.startsWith("0o")) {
-            base = 8;
-        } else if (string.startsWith("0x")) {
-            base = 16;
-        }
-    }
-
-    return u32fromString((base == 10) ? string : string.substring(2), base);
-}
-
-String u32toString(uint32_t value, int base) {
-    String result;
-    result.reserve(32 + 2);
-
-    if (base == 2) {
-        result += "0b";
-    } else if (base == 8) {
-        result += "0o";
-    } else if (base == 16) {
-        result += "0x";
-    }
-
-    char buffer[33] = {0};
-    ultoa(value, buffer, base);
-    result += buffer;
-
-    return result;
 }

@@ -2,14 +2,11 @@
 
 ALEXA MODULE
 
-Copyright (C) 2016-2019 by Xose Pérez <xose dot perez at gmail dot com>
+Copyright (C) 2016-2018 by Xose Pérez <xose dot perez at gmail dot com>
 
 */
 
 #if ALEXA_SUPPORT
-
-#include "relay.h"
-#include "broker.h"
 
 #include <fauxmoESP.h>
 fauxmoESP alexa;
@@ -26,13 +23,13 @@ static std::queue<alexa_queue_element_t> _alexa_queue;
 // ALEXA
 // -----------------------------------------------------------------------------
 
-bool _alexaWebSocketOnKeyCheck(const char * key, JsonVariant& value) {
+bool _alexaWebSocketOnReceive(const char * key, JsonVariant& value) {
     return (strncmp(key, "alexa", 5) == 0);
 }
 
-void _alexaWebSocketOnConnected(JsonObject& root) {
+void _alexaWebSocketOnSend(JsonObject& root) {
+    root["alexaVisible"] = 1;
     root["alexaEnabled"] = alexaEnabled();
-    root["alexaName"] = getSetting("alexaName");
 }
 
 void _alexaConfigure() {
@@ -51,19 +48,18 @@ void _alexaConfigure() {
 #endif
 
 #if BROKER_SUPPORT
-void _alexaBrokerCallback(const String& topic, unsigned char id, unsigned int value) {
+void _alexaBrokerCallback(const unsigned char type, const char * topic, unsigned char id, const char * payload) {
     
-    // Only process status messages for switches and channels
-    if (!topic.equals(MQTT_TOPIC_CHANNEL)
-        && !topic.equals(MQTT_TOPIC_RELAY)) {
-        return;
+    // Only process status messages
+    if (BROKER_MSG_TYPE_STATUS != type) return;
+
+    unsigned char value = atoi(payload);
+
+    if (strcmp(MQTT_TOPIC_CHANNEL, topic) == 0) {
+        alexa.setState(id+1, value > 0, value);
     }
 
-    if (topic.equals(MQTT_TOPIC_CHANNEL)) {
-        alexa.setState(id + 1, value > 0, value);
-    }
-
-    if (topic.equals(MQTT_TOPIC_RELAY)) {
+    if (strcmp(MQTT_TOPIC_RELAY, topic) == 0) {
         #if RELAY_PROVIDER == RELAY_PROVIDER_LIGHT
             if (id > 0) return;
         #endif
@@ -88,11 +84,9 @@ void alexaSetup() {
     alexa.createServer(!WEB_SUPPORT);
     alexa.setPort(80);
 
-    // Use custom alexa hostname if defined, device hostname otherwise
-    String hostname = getSetting("alexaName", ALEXA_HOSTNAME);
-    if (hostname.length() == 0) {
-        hostname = getSetting("hostname");
-    }
+    // Uses hostname as base name for all devices
+    // TODO: use custom switch name when available
+    String hostname = getSetting("hostname");
 
     // Lights
     #if RELAY_PROVIDER == RELAY_PROVIDER_LIGHT
@@ -126,10 +120,8 @@ void alexaSetup() {
     #if WEB_SUPPORT
         webBodyRegister(_alexaBodyCallback);
         webRequestRegister(_alexaRequestCallback);
-        wsRegister()
-            .onVisible([](JsonObject& root) { root["alexaVisible"] = 1; })
-            .onConnected(_alexaWebSocketOnConnected)
-            .onKeyCheck(_alexaWebSocketOnKeyCheck);
+        wsOnSendRegister(_alexaWebSocketOnSend);
+        wsOnReceiveRegister(_alexaWebSocketOnReceive);
     #endif
 
     // Register wifi callback
@@ -150,7 +142,7 @@ void alexaSetup() {
 
     // Register main callbacks
     #if BROKER_SUPPORT
-        StatusBroker::Register(_alexaBrokerCallback);
+        brokerRegister(_alexaBrokerCallback);
     #endif
     espurnaRegisterReload(_alexaConfigure);
     espurnaRegisterLoop(alexaLoop);
