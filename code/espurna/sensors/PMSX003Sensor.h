@@ -22,6 +22,7 @@
 #define PMS_TYPE_X003_9     1
 #define PMS_TYPE_5003T      2
 #define PMS_TYPE_5003ST     3
+#define PMS_TYPE_5003S      4
 
 // Sensor type specified data
 #define PMS_SLOT_MAX        4
@@ -35,7 +36,8 @@ const static struct {
     {"PMSX003", 13, 3, {MAGNITUDE_PM1dot0, MAGNITUDE_PM2dot5, MAGNITUDE_PM10}},
     {"PMSX003_9", 9, 3, {MAGNITUDE_PM1dot0, MAGNITUDE_PM2dot5, MAGNITUDE_PM10}},
     {"PMS5003T", 13, 3, {MAGNITUDE_PM2dot5, MAGNITUDE_TEMPERATURE, MAGNITUDE_HUMIDITY}},
-    {"PMS5003ST", 17, 4, {MAGNITUDE_PM2dot5, MAGNITUDE_TEMPERATURE, MAGNITUDE_HUMIDITY, MAGNITUDE_HCHO}}
+    {"PMS5003ST", 17, 4, {MAGNITUDE_PM2dot5, MAGNITUDE_TEMPERATURE, MAGNITUDE_HUMIDITY, MAGNITUDE_HCHO}},
+    {"PMS5003S", 13, 3, {MAGNITUDE_PM2dot5, MAGNITUDE_PM10, MAGNITUDE_HCHO}},
 };
 
 // [MAGIC][LEN][DATA9|13|17][SUM]
@@ -156,14 +158,13 @@ class PMSX003Sensor : public BaseSensor, PMSX003 {
         // ---------------------------------------------------------------------
         // Public
         // ---------------------------------------------------------------------
-
         PMSX003Sensor(): BaseSensor() {
             _count = pms_specs[_type].slot_count;
             _sensor_id = SENSOR_PMSX003_ID;
         }
 
         ~PMSX003Sensor() {
-            if (_serial) delete _serial;
+            removeSerial();
         }
 
         void setRX(unsigned char pin_rx) {
@@ -214,7 +215,7 @@ class PMSX003Sensor : public BaseSensor, PMSX003 {
             if (!_dirty) return;
 
             if (_soft) {
-                if (_serial) delete _serial;
+                if (_serial) removeSerial();
                 _serial = new SoftwareSerial(_pin_rx, _pin_tx, false, 64);
                 static_cast<SoftwareSerial*>(_serial)->enableIntTx(false);
             }
@@ -274,8 +275,6 @@ class PMSX003Sensor : public BaseSensor, PMSX003 {
                 return;
             }
 
-            _error = SENSOR_ERROR_OK;
-
             #if PMS_SMART_SLEEP
                 unsigned int readCycle;
                 if (_readCount++ > 30) {
@@ -302,18 +301,40 @@ class PMSX003Sensor : public BaseSensor, PMSX003 {
             uint16_t data[PMS_DATA_MAX];
             if (readData(data, pms_specs[_type].data_count)) {
                 if (_type == PMS_TYPE_5003ST) {
+                    if (data[14] > 10 && data[14] < 1000 && data[13] < 1000) {
+                        _slot_values[0] = data[4];
+                        _slot_values[1] = (double)data[13] / 10;
+                        _slot_values[2] = (double)data[14] / 10;
+                        _slot_values[3] = (double)data[12] / 1000;
+                        _error = SENSOR_ERROR_OK;
+                    } else {
+                        _error = SENSOR_ERROR_OUT_OF_RANGE;
+                        #if SENSOR_DEBUG
+                            DEBUG_MSG("[SENSOR] %s: Invalid temperature=%d humidity=%d.\n", pms_specs[_type].name, (int)data[13], (int)data[14]);
+                        #endif
+                    }
+                } else if (_type == PMS_TYPE_5003S) {
                     _slot_values[0] = data[4];
-                    _slot_values[1] = (double)data[13] / 10;
-                    _slot_values[2] = (double)data[14] / 10;
-                    _slot_values[3] = (double)data[12] / 1000;
+                    _slot_values[1] = data[5];
+                    _slot_values[2] = (double)data[12] / 1000;
+                    _error = SENSOR_ERROR_OK;
                 } else if (_type == PMS_TYPE_5003T) {
-                    _slot_values[0] = data[4];
-                    _slot_values[1] = (double)data[10] / 10;
-                    _slot_values[2] = (double)data[11] / 10;
+                    if (data[11] > 10 && data[11] < 1000 && data[10] < 1000) {
+                        _slot_values[0] = data[4];
+                        _slot_values[1] = (double)data[10] / 10;
+                        _slot_values[2] = (double)data[11] / 10;
+                        _error = SENSOR_ERROR_OK;
+                    } else {
+                        _error = SENSOR_ERROR_OUT_OF_RANGE;
+                        #if SENSOR_DEBUG
+                            DEBUG_MSG("[SENSOR] %s: Invalid temperature=%d humidity=%d.\n", pms_specs[_type].name, (int)data[10], (int)data[11]);
+                        #endif
+                    }
                 } else {
                     _slot_values[0] = data[3];
                     _slot_values[1] = data[4];
                     _slot_values[2] = data[5];
+                    _error = SENSOR_ERROR_OK;
                 }
             }
 
@@ -334,6 +355,13 @@ class PMSX003Sensor : public BaseSensor, PMSX003 {
         // Current value for slot # index
         double value(unsigned char index) {
             return _slot_values[index];
+        }
+
+    private:
+        void removeSerial() {
+            if (_serial && _soft) {
+                delete static_cast<SoftwareSerial*>(_serial);
+            }
         }
 
     protected:
