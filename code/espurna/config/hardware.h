@@ -188,6 +188,94 @@
     #define DHT_SUPPORT         1
     #define DHT_PIN             12
 
+#elif defined(AKB_D1R2)
+
+    // Info
+    #define MANUFACTURER        "AK-SOFT"
+    #define DEVICE              "D1R2"
+
+    // Buttons GPIO0
+    #define BUTTON1_PIN         0
+    #define BUTTON1_MODE        BUTTON_PUSHBUTTON | BUTTON_DEFAULT_HIGH
+    #define BUTTON1_RELAY       1
+
+    // Buttons D5/sck GPI14
+    #define BUTTON2_PIN         14
+    #define BUTTON2_MODE        BUTTON_SWITCH | BUTTON_SET_PULLUP | BUTTON_DEFAULT_HIGH
+    #define BUTTON2_RELAY       1
+
+    // Relays
+    // D6 aka GPIO12
+    #define RELAY1_PIN          12
+    #define RELAY1_TYPE         RELAY_TYPE_NORMAL
+
+    // Relays D7 aka
+    #define RELAY2_PIN          13
+    #define RELAY2_TYPE         RELAY_TYPE_NORMAL
+
+    #define RELAY3_PIN          15
+    #define RELAY2_TYPE         RELAY_TYPE_NORMAL
+
+    // LED
+  //  #define LED1_PIN            13
+  //  #define LED1_PIN_INVERSE    1
+
+#elif defined(AKB_D1_MINI)
+
+      // Info
+      #define MANUFACTURER        "AKSOFT"
+      #define DEVICE              "D1_MINI_RELAYSHIELD"
+
+          // Buttons
+      // No buttons on the D1 MINI alone, but defining it without adding a button doen't create problems
+      #define BUTTON1_PIN         0   // Connect a pushbutton between D3 and GND,
+                                      // it's the same as using a Wemos one button shield
+      #define BUTTON1_MODE        BUTTON_PUSHBUTTON | BUTTON_DEFAULT_HIGH
+      #define BUTTON1_RELAY       1
+
+      // Relays
+      #define RELAY1_PIN          5
+      #define RELAY1_TYPE         RELAY_TYPE_NORMAL
+
+      // Light RGBW
+      #define LED1_PIN            2
+      #define LED1_PIN_INVERSE    1
+
+      // When Wemos relay shield is connected GPIO5 (D1) is used for relay,
+      // so I2C must be remapped to other pins
+      #define I2C_SDA_PIN         12  // D6
+      #define I2C_SCL_PIN         14  // D5
+      // Externa supply chech
+      #define ANALOG_SUPPORT      1
+
+
+#elif defined(AKB_D1_PRO)
+
+          // Info
+          #define MANUFACTURER        "AKSOFT"
+          #define DEVICE              "D1_PRO_RELAYSHIELD"
+
+              // Buttons
+          // No buttons on the D1 MINI alone, but defining it without adding a button doen't create problems
+          #define BUTTON1_PIN         0   // Connect a pushbutton between D3 and GND,
+                                          // it's the same as using a Wemos one button shield
+          #define BUTTON1_MODE        BUTTON_PUSHBUTTON | BUTTON_DEFAULT_HIGH
+          #define BUTTON1_RELAY       1
+
+          // Relays
+          #define RELAY1_PIN          5
+          #define RELAY1_TYPE         RELAY_TYPE_NORMAL
+
+          // Light RGBW
+          #define LED1_PIN            2
+          #define LED1_PIN_INVERSE    1
+
+          // When Wemos relay shield is connected GPIO5 (D1) is used for relay,
+          // so I2C must be remapped to other pins
+          #define I2C_SDA_PIN         12  // D6
+          #define I2C_SCL_PIN         14  // D5
+
+
 // -----------------------------------------------------------------------------
 // ESPurna
 // -----------------------------------------------------------------------------
